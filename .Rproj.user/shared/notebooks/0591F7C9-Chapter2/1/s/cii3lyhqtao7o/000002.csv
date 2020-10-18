@@ -1,0 +1,42 @@
+"0","bay_cbgs <- 
+  bay_county_names %>% 
+  map_dfr(function(county) {
+    block_groups(""CA"", county, cb = T, progress_bar = F)
+  })
+"
+"2","Using FIPS code '06' for state 'CA'
+"
+"2","Using FIPS code '001' for 'Alameda County'
+"
+"2","Using FIPS code '06' for state 'CA'
+"
+"2","Using FIPS code '013' for 'Contra Costa County'
+"
+"2","Using FIPS code '06' for state 'CA'
+"
+"2","Using FIPS code '041' for 'Marin County'
+"
+"2","Using FIPS code '06' for state 'CA'
+"
+"2","Using FIPS code '055' for 'Napa County'
+"
+"2","Using FIPS code '06' for state 'CA'
+"
+"2","Using FIPS code '075' for 'San Francisco County'
+"
+"2","Using FIPS code '06' for state 'CA'
+"
+"2","Using FIPS code '081' for 'San Mateo County'
+"
+"2","Using FIPS code '06' for state 'CA'
+"
+"2","Using FIPS code '085' for 'Santa Clara County'
+"
+"2","Using FIPS code '06' for state 'CA'
+"
+"2","Using FIPS code '095' for 'Solano County'
+"
+"2","Using FIPS code '06' for state 'CA'
+"
+"2","Using FIPS code '097' for 'Sonoma County'
+"

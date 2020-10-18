@@ -1,0 +1,349 @@
+---
+title: "Assignment 1 Submission"
+author: "Haleigh Quinn"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: html_document
+---
+## Reading & Saving the Data 
+```{r}
+library(tidyverse)
+
+years <- 2017:2020
+quarters <- 1:4
+types <- c("Electric", "Gas")
+months <- 1:42
+pge_elec_gas <- NULL
+
+for (quarter in quarters){
+  for (year in years){
+    for (type in types){
+       if ((quarter %in% 3:4) & (year %in% 2020)){
+        next 
+       }
+      
+      filename <- 
+        paste0(
+          "PGE_",
+          year, 
+          "_Q", 
+          quarter,
+          "_",
+          type,
+          "UsageByZip.csv"
+        )
+     
+      print(filename)
+      
+      
+      temp <- read_csv(filename)
+      
+      if(type %in% "Gas"){
+        print(temp)
+        temp <- temp %>% 
+          mutate(TOTALKBTU = 100 * TOTALTHM) %>% 
+          select(-TOTALTHM, -AVERAGETHM)
+      } else {
+        temp <- temp %>% 
+        mutate(TOTALKBTU = 3.412 * TOTALKWH) %>% 
+          select(-TOTALKWH, -AVERAGEKWH)
+      }
+      
+      pge_elec_gas <- rbind(pge_elec_gas, temp)
+
+    }
+  }
+}
+
+
+```
+
+
+## Filtering to Zip Codes in the Bay Area 
+```{r}
+library(tidyverse)
+library(sf)
+library(tigris)
+library(leaflet)
+library (dplyr)
+
+
+ca_counties <- counties("CA", cb = T, progress_bar = F)
+
+st_crs(ca_counties)
+
+projection <- "+proj=utm +zone=10 +ellps=GRS80 +datum=NAD83 +units=ft +no_defs"
+
+ca_counties_transformed <- 
+  ca_counties %>% 
+  st_transform(4326) %>% 
+  st_transform(26910) %>% 
+  st_transform(projection) %>% 
+  st_transform(st_crs(ca_counties))
+
+usa_zips <- 
+  zctas(cb = T, progress_bar = F)
+
+bay_county_names <-
+  c(
+    "Alameda",
+    "Contra Costa",
+    "Marin",
+    "Napa",
+    "San Francisco",
+    "San Mateo",
+    "Santa Clara",
+    "Solano",
+    "Sonoma"
+  )
+
+bay_cbgs <- 
+  bay_county_names %>% 
+  map_dfr(function(county) {
+    block_groups("CA", county, cb = T, progress_bar = F)
+  })
+
+bay_counties <-
+  ca_counties %>%
+  filter(NAME %in% bay_county_names)
+
+
+bay_zips <-
+  usa_zips %>% 
+  st_centroid() %>% 
+  .[bay_counties, ] %>% 
+  st_set_geometry(NULL) %>% 
+  left_join(usa_zips %>% select(GEOID10)) %>% 
+  st_as_sf()
+
+colnames(pge_elec_gas)
+
+
+pge_rc_bayzips <-
+  pge_elec_gas %>% 
+  filter(CUSTOMERCLASS %in% c("Gas- Residential", "Elec- Residential", "Gas- Commercial", "Elec- Commercial")) %>% 
+  mutate(
+    ZIPCODE = ZIPCODE %>% as.character()
+  ) %>% 
+  group_by(ZIPCODE, CUSTOMERCLASS) %>%
+  right_join(
+    bay_zips %>% select(GEOID10),
+    by = c("ZIPCODE" = "GEOID10")
+  ) %>%  
+  ungroup() %>% 
+  group_by(CUSTOMERCLASS,MONTH,YEAR) %>% 
+  summarize(
+    TOTALKBTU = sum(TOTALKBTU, na.rm = T)
+  ) 
+
+
+  
+class(pge_rc_bayzips$ZIPCODE)
+
+```
+## Creating New Date Column  
+```{r}
+library(date)
+library(zoo)
+library(dplyr)
+
+
+pge_rc_bayzips$Date <- as.yearmon(paste(pge_rc_bayzips$YEAR, pge_rc_bayzips$MONTH), "%Y %m")
+
+pge_bayzips_date <- pge_rc_bayzips %>% 
+  mutate(
+    DATE= case_when(
+  Date == "Jan 2017" ~ 1,
+  Date == "Feb 2017" ~ 2,
+  Date == "Mar 2017" ~ 3,
+  Date == "Apr 2017" ~ 4,
+  Date == "May 2017" ~ 5,
+  Date == "Jun 2017" ~ 6,
+  Date == "Jul 2017" ~ 7,
+  Date == "Aug 2017" ~ 8,
+  Date == "Sep 2017" ~ 9,
+  Date == "Oct 2017" ~ 10,
+  Date == "Nov 2017" ~ 11,
+  Date == "Dec 2017" ~ 12,
+  Date == "Jan 2018" ~ 13,
+  Date == "Feb 2018" ~ 14,
+  Date == "Mar 2018" ~ 15,
+  Date == "Apr 2018" ~ 16,
+  Date == "May 2018" ~ 17,
+  Date == "Jun 2018" ~ 18,
+  Date == "Jul 2018" ~ 19,
+  Date == "Aug 2018" ~ 20,
+  Date == "Sep 2018" ~ 21,
+  Date == "Oct 2018" ~ 22,
+  Date == "Nov 2018" ~ 23,
+  Date == "Dec 2018" ~ 24,
+  Date == "Jan 2019" ~ 25,
+  Date == "Feb 2019" ~ 26,
+  Date == "Mar 2019" ~ 27,
+  Date == "Apr 2019" ~ 28,
+  Date == "May 2019" ~ 29,
+  Date == "Jun 2019" ~ 30,
+  Date == "Jul 2019" ~ 31,
+  Date == "Aug 2019" ~ 32,
+  Date == "Sep 2019" ~ 33,
+  Date == "Oct 2019" ~ 34,
+  Date == "Nov 2019" ~ 35,
+  Date == "Dec 2019" ~ 36,
+  Date == "Jan 2020" ~ 37,
+  Date == "Feb 2020" ~ 38,
+  Date == "Mar 2020" ~ 39,
+  Date == "Apr 2020" ~ 40,
+  Date == "May 2020" ~ 41,
+  Date == "Jun 2020" ~ 42,
+  TRUE ~ NA_real_
+    )
+)  
+ 
+```
+
+
+## Histogram - 9 Bay Area Counties Monthly Electric & Gas Usage, 2017-2020 
+```{r}
+library(tidyverse)
+library(plotly)
+library(zoo)
+
+
+
+pge_bayzips_date <- transform(pge_bayzips_date, Date = as.Date(Date, frac = 1))
+ 
+class(pge_bayzips_date$Date)
+ 
+pge_bay_chart <-
+  pge_bayzips_date %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = Date,
+      y = TOTALKBTU,
+      fill = CUSTOMERCLASS
+    ),
+    stat = "identity",
+    position = "stack"
+  ) +
+  labs(
+    x = "Month",
+    y = "KBTU",
+    title = "9 Bay Area Counties Monthly Electric & Gas Usage, 2017-2020",
+    fill = "Energy Type"
+  ) 
+
+pge_bay_chart %>% 
+  ggplotly() %>% 
+  layout(
+    xaxis = list(fixedrange = T),
+    yaxis = list(fixedrange = T)
+  ) %>% 
+  config(displayModeBar = F) 
+  
+
+```
+When comparing March of 2019 with March of 2020, there was a notable increase in Residential Electricity usage, which can likely be attributed an influx of people quarantining due to COVID-19. This increase in Residential Electricity usage continued from March through June. 
+
+Interestingly, Residential Gas Usage decreased slightly when comparing March 2019 to March 2020. However, Residential Gas Usage increased significantly in April 2020 as compared to April 2019, which could be attributed, again, to the influx of people spending more time at home. 
+
+As expected, Commercial Electricity usage was lesser for the first six months of 2020 overall than it was for the first six months of 2019. This is an unsurprising finding, since Bay Area "stay-at-home" orders would likely decrease the need for Commercial Electricity. Conversely, Commercial Gas usage experienced a slight increase during March 2020 and April 2020 compared to the same months in 2019, but then experienced a stark decrease moving into the summer months
+
+
+
+
+## Creating Covid Comparison Data: 
+```{r}
+library(tidyverse)
+library(dplyr)
+library(sf)
+library(tigris)
+library(leaflet)
+
+pge_map_zips <-
+  pge_elec_gas %>% 
+  filter(CUSTOMERCLASS %in% c("Gas- Residential", "Elec- Residential", "Gas- Commercial", "Elec- Commercial")) %>% 
+  mutate(
+    ZIPCODE = ZIPCODE %>% as.character()
+  ) %>% 
+  group_by(ZIPCODE, YEAR, CUSTOMERCLASS, MONTH) %>%
+  summarize(
+    TOTALKBTU = sum(TOTALKBTU, na.rm = T)
+  ) %>% 
+  right_join(
+    bay_zips %>% select(GEOID10),
+    by = c("ZIPCODE" = "GEOID10")
+  )
+
+library(zoo)
+pge_map_zips$Date <- as.yearmon(paste(pge_map_zips$YEAR, pge_map_zips$MONTH), "%Y %m")
+
+pge_map_zips$Date <- NULL  
+
+
+pge_covid <-
+  pge_map_zips %>% 
+  filter(CUSTOMERCLASS == "Elec- Residential", YEAR %in% 2019:2020, MONTH %in% 3:6) %>%
+  pivot_wider(
+    names_from = YEAR, 
+    values_from = TOTALKBTU,
+    values_fill = 0
+  ) %>% 
+  rename(
+    KBTU2019 = "2019",
+    KBTU2020 = "2020"
+  ) %>%
+  mutate(
+    KBTU_change = ((KBTU2020 - KBTU2019)/(KBTU2019)) * 100
+ ) %>% 
+ st_as_sf()
+
+
+```
+
+
+
+
+
+## Map - Percentage Change in Residential Electricity Use During COVID-19
+```{r}
+library(tidyverse)
+library(sf)
+library(tigris)
+library(leaflet)
+
+
+  res_pal <- colorNumeric(
+  palette = "Blues",
+  domain = 
+    pge_covid$KBTU_change
+)
+
+leaflet() %>% 
+  addTiles() %>% 
+  addPolygons(
+    data = pge_covid,
+    fillColor = ~res_pal(KBTU_change),
+    color = "white",
+    opacity = 0.5,
+    fillOpacity = 0.5,
+    weight = 1,
+    label = ~paste0(
+      round(KBTU_change), 
+      "KBTU Percentage Change in",
+      ZIPCODE
+    ),
+    highlightOptions = highlightOptions(
+      weight = 2,
+      opacity = 1
+    )
+  ) %>% 
+  addLegend(
+    data = pge_covid,
+    pal = res_pal,
+    values = ~KBTU_change,
+    title = "Percentage Change in Residential Electric Energy Use<br>During COVID-19"
+  )
+
+```
+Aside from zipcodes belonging to Sonoma County, all of the zipcodes in the Bay Area experienced a positive percentage change in Residential Electricity Use during Covid-19. San Mateo, Santa Clara, Palo Alto, and Loma Mar did not experience a percentage change in Residential Electricity Use at all, though Stanford experiences a 8% change in Residential Electricity Use during COVID-19. A key assumption that is relevant in this analysis is the fact that these changes in Electricity occured during a state mandated lock-down that necessitated people remain home. 
+

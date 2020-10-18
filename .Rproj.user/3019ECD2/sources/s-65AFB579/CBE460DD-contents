@@ -1,0 +1,1160 @@
+---
+title: "Chapter 2 Notes"
+author: "Haleigh Quinn"
+date: "10/1/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+# Census Data: 
+```{r}
+ 
+  library(tidyverse)
+  library(sf)
+  library(tigris)
+  library(leaflet)
+  library(censusapi)
+
+# Census Key: 
+Sys.setenv(CENSUS_KEY="6e3cadd908fdaf8f7d3d728f4faa99e738db811a")
+
+# Loading Contents of 5-year Data Dictionary
+acs_vars_2018_5yr <-
+  listCensusMetadata(
+    name = "2018/acs/acs5",
+    type = "variables"
+  )
+
+saveRDS(acs_vars_2018_5yr, "acs_vars_2018_5yr.rds")
+
+# Generate Clean Dataset of Sex by Age of CBG's in San Mateo County
+smc_sexbyage <-
+  getCensus(
+    name = "acs/acs5",
+    vintage = 2018,
+    region = "block group:*", 
+    regionin = "state:06+county:081",
+    vars = "group(B01001)"
+  ) %>%
+  mutate(
+    cbg =
+      paste0(state,county,tract,block_group)
+  ) %>% 
+  select(!c(GEO_ID,state,county,tract,block_group,NAME) & !ends_with(c("EA","MA","M"))) %>%
+  pivot_longer(
+    ends_with("E"),
+    names_to = "variable",
+    values_to = "estimate"
+  ) %>%
+  left_join(
+    acs_vars_2018_5yr %>% 
+      select(name, label), 
+    by = c("variable" = "name")
+  ) %>% 
+  select(-variable) %>% 
+  separate(
+    label,
+    into = c(NA,NA,"sex","age"),
+    sep = "!!"
+  ) %>% 
+  filter(!is.na(age))
+
+  # !ends_with(c("EA","MA","M")))) gets rid of any unused fields quickly. Annotation fields ending in EA or MA are usually empty, and thus can be removed. The census data also comes with "estimate" fields ending in "E", and margins of error fields ending in "M". 
+  # into = argument is your opportunity to create new fields that will hold the separated contents of label, which holds strings like "Estimate!!Total!!Female!!65 to 74 years". Estimate and Total are set to NA because we have no use for the first two separated elements. Sex and age are specified. 
+
+  # filter(!is.na(age)) prevents double counting. !is.na() is read as "is not empty". 
+
+# Generate Percentage Elderly for each CBG: 
+smc_elderly <- 
+  smc_sexbyage %>% 
+  mutate(
+    elderly = 
+      ifelse(
+        age %in% c(
+          "65 and 66 years",
+          "67 to 69 years",
+          "70 to 74 years",
+          "75 to 79 years",
+          "80 to 84 years",
+          "85 years and over"
+        ),
+        estimate,
+        NA
+      )
+  ) %>% 
+  group_by(cbg) %>% 
+  summarize(
+    elderly = sum(elderly, na.rm = T),
+    total_pop = sum(estimate, na.rm = T)
+  ) %>% 
+  mutate(
+    percent_elderly = elderly/total_pop*100
+  ) %>% 
+  filter(!is.na(percent_elderly))
+
+  # ifelse() takes three arguments: a logical condition, the result that should be given if the condition is true, and the result that should be given if the condition is false. 
+
+# Create Map of Percent Elderly in CBG's in San Mateo:
+
+smc_blockgroups <- block_groups("CA", "San Mateo", cb = T, progress_bar = F)
+
+elderly_pal <- colorNumeric(
+  palette = "Blues",
+  domain = 
+    smc_elderly$percent_elderly
+)
+
+leaflet() %>% 
+  addTiles() %>% 
+  addPolygons(
+    data = 
+      smc_elderly %>% 
+        left_join(
+          smc_blockgroups %>% select(GEOID), 
+          by = c("cbg" = "GEOID")
+        ) %>% 
+        st_as_sf() %>% 
+        st_transform(4326),
+    fillColor = ~elderly_pal (percent_elderly),
+    color = "white",
+    opacity = 0.5,
+    fillOpacity = 0.5,
+    weight = 1,
+    label = ~paste0(
+      round(percent_elderly), 
+      "% over age 65"
+    ),
+    highlightOptions = highlightOptions(
+      weight = 2,
+      opacity = 1
+    )
+  ) %>% 
+  addLegend(
+    data = smc_elderly,
+    pal = elderly_pal,
+    values = ~percent_elderly,
+    title = "% over 65"
+  )
+```
+
+
+# Equity Analysis: 
+> Note: The B19001 series of datasets, specifically B19001A through B19001G are the most useful datasets for the different key racial groupds recorded by the Census Bureau. 
+
+```{r}
+library(tidyverse)
+library(censusapi)
+
+Sys.setenv(CENSUS_KEY="6e3cadd908fdaf8f7d3d728f4faa99e738db811a")
+
+#Loading B19001A (Household income for households led by somebody who is "White alone")
+
+bay_income_white <-
+  getCensus(
+    name = "acs/acs5",
+    vintage = 2018,
+    region = "county:001,013,041,055,075,081,085,095,097",
+    regionin = "state:06",
+    vars = "group(B19001A)"
+  ) %>%
+  select(!c(GEO_ID,state,NAME) & !ends_with(c("EA","MA","M"))) %>%
+  pivot_longer(
+    ends_with("E"),
+    names_to = "variable",
+    values_to = "estimate"
+  ) %>%
+  left_join(
+    acs_vars_2018_5yr %>% 
+      select(name, label), 
+    by = c("variable" = "name")
+  ) %>% 
+  select(-variable) %>% 
+  separate(
+    label,
+    into = c(NA,NA,"income"),
+    sep = "!!"
+  ) %>% 
+  filter(!is.na(income))
+
+# Creating a dataframe for race lables to prepare to bind the 7 datasets. 
+
+census_race_labels <- data.frame(
+  code = c("A","B","C","D","E","F","G"),
+  label =
+    c(
+      "White Alone",
+      "Black or African American",
+      "American Indian and Alaska Native Alone",
+      "Asian Alone",
+      "Native Hawaiian and Other Pacific Islander Alone)",
+      "Some Other Race Alone",
+      "Two or More Races"
+    )
+)
+
+  #This sets up a relationship between the letter codes and the race labels. 
+
+# Simplified Version: Code required before conducting the equity analysis.
+census_race_labels <- 
+  c(
+    "White Alone",
+    "Black or African American",
+    "American Indian and Alaska Native Alone",
+    "Asian Alone",
+    "Native Hawaiian and Other Pacific Islander Alone)",
+    "Some Other Race Alone",
+    "Two or More Races"
+  )
+
+
+bay_income_race <-
+  1:7 %>% 
+  map_dfr(function(x){
+    getCensus(
+      name = "acs/acs5",
+      vintage = 2018,
+      region = "county:001,013,041,055,075,081,085,095,097",
+      regionin = "state:06",
+      vars = paste0("group(B19001",LETTERS[x],")")
+    ) %>%
+      select(!c(GEO_ID,state,NAME) & !ends_with(c("EA","MA","M"))) %>%
+      pivot_longer(
+        ends_with("E"),
+        names_to = "variable",
+        values_to = "estimate"
+      ) %>%
+      left_join(
+        acs_vars_2018_5yr %>% 
+          select(name, label), 
+        by = c("variable" = "name")
+      ) %>% 
+      select(-variable) %>% 
+      separate(
+        label,
+        into = c(NA,NA,"income"),
+        sep = "!!"
+      ) %>% 
+      filter(!is.na(income)) %>% 
+      mutate(race = census_race_labels[x])
+  })
+
+# census_race_labels has been mutated from a dataframe to a vector of 7 strings. --> We are now feeding the vector of integers 1:7 into function(x) so that we can easily refer to LETTER[x] to get A through G.
+# census_race labels will now give the appropriate racial label. 
+
+#Creating Absolute and Percentage Based Stacked Bar Charts: Plotting "outcome" (income in this case) by Population Group
+
+library(plotly)
+
+bay_income_race %>% 
+  group_by(income, race) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = income %>% factor(),
+      y = estimate,
+      fill = race
+    ),
+    stat = "identity",
+    position = "stack"
+  ) +
+  labs(
+    x = "Household income",
+    y = "Number of households",
+    title = "Bay Area household income by race",
+    fill = "Race of householder"
+  )
+
+# add + coord_flip() to unjumble the income lables at the bottom
+
+bay_income_race %>% 
+  group_by(income, race) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = income %>% factor(),
+      y = estimate,
+      fill = race
+    ),
+    stat = "identity",
+    position = "stack"
+  ) +
+  labs(
+    x = "Household income",
+    y = "Number of households",
+    title = "Bay Area household income by race",
+    fill = "Race of householder"
+  ) +
+  coord_flip()
+
+# Now the income tiers are out of order. It has been ordered aphabetically, but we want it be ordered as it is in the ACS data, which is capture by bay_income_race$income[1:16]. This can be fixed by piping to factor() and adding level= 
+
+bay_income_race$income[1:16]
+
+bay_income_race %>% 
+  group_by(income, race) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = income %>% factor(levels = bay_income_race$income[1:16]),
+      y = estimate,
+      fill = race
+    ),
+    stat = "identity",
+    position = "stack"
+  ) +
+  labs(
+    x = "Household income",
+    y = "Number of households",
+    title = "Bay Area household income by race",
+    fill = "Race of householder"
+  ) +
+  coord_flip()
+
+#Aesthetic Issues: 
+  # We want to change the "absolute" bar heights so that we can see the smaller bars --> add position = "fill" instead of position = "stack"
+  # We want to reverse the income tiers so that "Less than 10,000" at the top, rather than the bottom --> use rev()
+  # We want to move the legend to the bottom so that we have more room to see the bars --> use some arguments in theme()
+
+bay_income_race %>% 
+  group_by(income, race) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = income %>% factor(levels = rev(bay_income_race$income[1:16])),
+      y = estimate,
+      fill = race
+    ),
+    stat = "identity",
+    position = "fill"
+  ) +
+  labs(
+    x = "Household income",
+    y = "Proportion of households",
+    title = "Bay Area household income by race",
+    fill = "Race of householder"
+  ) +
+  coord_flip() +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "vertical"
+  )
+
+# Adding bar for "total" population, not broken down into income tiers --> do this by creating a new variable for total and bind the new chart with bay_income_race to graph. 
+
+bay_race_total <-
+  bay_income_race %>% 
+  group_by(race) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  mutate(income = "Total")
+
+bay_income_race %>% 
+  group_by(income, race) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  rbind(bay_race_total) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = income %>% factor(levels = rev(c("Total",bay_income_race$income[1:16]))),
+      y = estimate,
+      fill = race
+    ),
+    stat = "identity",
+    position = "fill"
+  ) +
+  labs(
+    x = "Household income",
+    y = "Proportion of households",
+    title = "Bay Area household income by race",
+    fill = "Race of householder"
+  ) +
+  coord_flip() +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "vertical"
+  )
+
+# How to manipulate the data to get numbers from the chart that all you to communicate information about the chart: 
+
+((sum(bay_race_total$estimate[1:6])/sum(bay_race_total$estimate))*100) %>% round() 
+# This give the percentage of the overall population that is non-white. 
+
+((bay_income_race %>% 
+  filter(income %in% bay_income_race$income[1:5]) %>% 
+  filter(race != "White Alone") %>% 
+  pull(estimate) %>% 
+  sum()) /
+  (bay_income_race %>% 
+    filter(income %in% bay_income_race$income[1:5]) %>% 
+    pull(estimate) %>% 
+    sum()) * 100) %>% 
+  round()
+# This gives the percentage of the population earning an income of less than 30,000 that is non-white. 
+
+((((bay_income_race %>% 
+  filter(income %in% bay_income_race$income[1:5]) %>% 
+  filter(race != "White Alone") %>% 
+  pull(estimate) %>% 
+  sum()) /
+  (bay_income_race %>% 
+    filter(income %in% bay_income_race$income[1:5]) %>% 
+    pull(estimate) %>% 
+    sum())) / (sum(bay_race_total$estimate[1:6])/sum(bay_race_total$estimate)) - 1) * 100) %>% 
+  round()
+# This gives how much more likely non-white households are to make an income less than 30,000 in percentage. 
+# pull() is a way of grabbing one field from a dataframe, similar to how you use $ 
+# You can also construct equity analyses out of CBG level information. However, if the ACS provides you the information you are interested in at the larger geographic scale, like above, there is no need to work with CBG level data. 
+# You may be interested in an outcome that is not included in census data at all. In that case, you should first join your outcome data to a population group in the census data, and then use CBGs for the geographies. 
+
+#Example of using CBGs: 
+
+library(readxl)
+
+temp <- tempfile()
+download.file("https://oehha.ca.gov/media/downloads/calenviroscreen/document/ces3results.xlsx",destfile = temp, mode = "wb")
+
+ces3 <- read_excel(temp, sheet = "CES 3.0 (2018 Update)")
+
+unlink(temp)
+
+# if you don't specify the sheet = argument in read_excel(), it will default load the first sheet in the excel file. If you don;t know the contents of the excel sheet, you can use excel_sheets() on the file view the sheet names.
+# Pair temp <- tempfile() with unlink(temp) so that the temporary folder and its contents are removed. 
+
+# Using PM2.5 as the outcome variable and creating outcome tiers based on outcomes seen in the Bay Area: 
+
+bay_county_names <-
+  c(
+    "Alameda",
+    "Contra Costa",
+    "Marin",
+    "Napa",
+    "San Francisco",
+    "San Mateo",
+    "Santa Clara",
+    "Solano",
+    "Sonoma"
+  )
+
+ca_tracts <- tracts("CA", cb = T, progress_bar = F)
+
+ces3_bay_pm25 <-
+  ces3 %>% 
+  filter(`California County` %in% bay_county_names) %>% 
+  select(`Census Tract`, PM2.5) %>% 
+  left_join(
+    ca_tracts %>% 
+      transmute(GEOID = as.numeric(GEOID)), 
+    by = c("Census Tract" = "GEOID")
+  ) %>% 
+  st_as_sf()
+
+pm25_pal <- colorNumeric(
+  palette = "Reds",
+  domain = ces3_bay_pm25$PM2.5
+)
+
+leaflet() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data = ces3_bay_pm25,
+    fillColor = ~pm25_pal(PM2.5),
+    color = "white",
+    weight = 0.5,
+    fillOpacity = 0.5,
+    label = ~PM2.5
+  )
+# California County and Census Tract are written in backticks because the the space in the variable name.
+# Check for NAs by using this: sum(is.na(ces3_bay_pm25$PM2.5)). If you need to remove NAs, use filter(!is.na(PM2.5))
+# GEOID won't join with the Census Tract field in ces3, which is a numeric type field. You then need to convert the character field to a numeric field. Transmute() is like mutate() but only keeps what has been mutated, which is good in this situation. 
+
+
+summary(ces3_bay_pm25$PM2.5)
+
+# Assume the outcome of PM2.5 levels has the same impact on everyone --> for example, assume this is race-blind at the census tract level.
+
+# Creation of tracts by race: 
+census_race_labels <- 
+  c(
+    "White Alone",
+    "Black or African American",
+    "American Indian and Alaska Native Alone",
+    "Asian Alone",
+    "Native Hawaiian and Other Pacific Islander Alone)",
+    "Some Other Race Alone",
+    "Two or More Races"
+  )
+
+bay_race_tracts <-
+  1:7 %>% 
+  map_dfr(function(x){
+    getCensus(
+      name = "acs/acs5",
+      vintage = 2018,
+      region = "tract:*",
+      regionin = "state:06+county:001,013,041,055,075,081,085,095,097",
+      vars = paste0("B19001",LETTERS[x],"_001E")
+    ) %>%
+      mutate(
+        tract = paste0(state, county, tract) %>% as.numeric(),
+        race = census_race_labels[x]
+      ) %>% 
+      select(
+        tract,
+        race,
+        estimate = paste0("B19001",LETTERS[x],"_001E")
+      )
+  })
+# Note the difference in the region = and regionin = arguments between this loop, and the loop used above in the income by race equity analysis. In this loop, since we need tract level data instead of county level data, we must specify tract:* (all tracts in) for region = and specify the state and county codes in regionin =
+# Since we just need total counts by race in each tract, we don't need to use the pivoting steps as we've done before. --> the vars = argument now grabs a single variable directly (_001E), rather than specifying a group().
+# mutate() was used to recreate the tract field as a string of state, county, and tract when working with tract data to make up for the ACS API not giving the most useful form of the tract ID directly. Tract ID is also being converted to a numeric to help with joining later down the line. 
+# select() allows you to rename fields that you choose to select.
+
+
+# Joining using group_by() and summarize():
+bay_pm25_race <-
+  bay_race_tracts %>% 
+  left_join(
+    ces3_bay_pm25 %>% 
+      st_set_geometry(NULL),
+    by = c("tract" = "Census Tract")
+  ) %>% 
+  mutate(
+    PM2.5_tier =
+      case_when(
+        PM2.5 < 5 ~ "4-5",
+        PM2.5 < 6 ~ "5-6",
+        PM2.5 < 7 ~ "6-7",
+        PM2.5 < 8 ~ "7-8",
+        PM2.5 < 9 ~ "8-9",
+        PM2.5 < 10 ~ "9-10",
+        TRUE ~ "10-11"
+      ) 
+  ) %>% 
+  group_by(race, PM2.5_tier) %>% 
+  summarize(estimate = sum(estimate, na.rm = T))
+
+# case_when is used to break the intervals of PM2.5 into simple integer intervals because it will be easier to understand in a chart. These intervals can be decided by previewing the PM2.5 distribution with summary(), as we did above.
+
+# Creating Stacked Bar Graph: 
+bay_pm25_race_stacked <-
+  bay_pm25_race %>% 
+  group_by(PM2.5_tier, race) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  rbind(
+    bay_pm25_race %>% 
+      group_by(race) %>% 
+      summarize(estimate = sum(estimate)) %>% 
+      mutate(PM2.5_tier = "Total")
+  ) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = PM2.5_tier %>% factor(levels = rev(c("Total","4-5","5-6","6-7","7-8","8-9","9-10","10-11"))),
+      y = estimate,
+      fill = race
+    ),
+    stat = "identity",
+    position = "stack"
+  ) +
+  labs(
+    x = "PM2.5",
+    y = "Number of households",
+    title = "Bay Area PM2.5 exposure by race",
+    subtitle = "Annual mean concentration of PM2.5 (average of quarterly means, µg/m3),\nover three years (2012 to 2014), aggregated by Census tract",
+    fill = "Race of householder"
+  ) +
+  coord_flip() +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "vertical"
+  )
+
+bay_pm25_race_fill <-
+  bay_pm25_race %>% 
+  group_by(PM2.5_tier, race) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  rbind(
+    bay_pm25_race %>% 
+      group_by(race) %>% 
+      summarize(estimate = sum(estimate)) %>% 
+      mutate(PM2.5_tier = "Total")
+  ) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = PM2.5_tier %>% factor(levels = rev(c("Total","4-5","5-6","6-7","7-8","8-9","9-10","10-11"))),
+      y = estimate,
+      fill = race
+    ),
+    stat = "identity",
+    position = "fill"
+  ) +
+  labs(
+    x = "PM2.5",
+    y = "Proportion of households",
+    title = "Bay Area PM2.5 exposure by race",
+    subtitle = "Annual mean concentration of PM2.5 (average of quarterly means, µg/m3),\nover three years (2012 to 2014), aggregated by Census tract",
+    fill = "Race of householder"
+  ) +
+  coord_flip() +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "vertical"
+  )
+
+bay_pm25_race_stacked
+bay_pm25_race_fill
+
+# streamlined some steps from earlier by incorporating the rbind() of the "total" counts of the racial groups into one pipeline. This is just an extra step to add the total bar to the top of the bar charts. 
+# included a subtitle through labs() to give a definition of the PM2.5 measure. 
+# \n was use to create line breaks in the subtitle line. 
+
+```
+
+
+# Migration: To what degree has the increased in income in the Bay Area a result of economic mobility, and to what extent is it a result of higher income newcomers dispalacing lower-income residents? 
+```{r}
+library(tidyverse)
+library(censusapi)
+
+# Relevant datasets from the ACS: 
+#   - B07010: Geograpical mobility in the past year by individual income in the past 12 months for current residence in the United States --> counts "people who've remained" and "people who've immigrated in" 
+#   - B07410: Geographical mobility in the past year by individual income in the past 12 months for residence 1 year ago in the United States --> counts "people who've remained" and "people who were here a year ago bu emigrated somewhere else"
+#   - can get "external net flow" from these two datasets. 
+
+# Load B07010 for 2019: 
+Sys.setenv(CENSUS_KEY="6e3cadd908fdaf8f7d3d728f4faa99e738db811a")
+
+acs_vars_2019_1yr <-
+  listCensusMetadata(
+    name = "2019/acs/acs1",
+    type = "variables"
+  )
+
+smc_mobility_current_19 <- 
+  getCensus(
+    name = "acs/acs1",
+    vintage = 2019,
+    region = "county:081",
+    regionin = "state:06",
+    vars = c("group(B07010)")
+  ) %>% 
+  select(!c(GEO_ID,state,NAME) & !ends_with(c("EA","MA","M"))) %>%
+  pivot_longer(
+    ends_with("E"),
+    names_to = "variable",
+    values_to = "estimate"
+  ) %>%
+  left_join(
+    acs_vars_2019_1yr %>% 
+      select(name, label), 
+    by = c("variable" = "name")
+  ) %>% 
+  select(-variable)
+
+# Need to evaluate the columns in the data in order to decide what information is duplicated/ can be combined into one category. In this case, "moved from abroad", "moved from different state", and "moved from different county" can be combined into the same "inflow" variable, and "moved within same county" and "same house 1 year ago" can be combined into the same "here since last year" variable: Here is the code to create those variable separations: 
+smc_mobility_current_19 <- 
+  getCensus(
+    name = "acs/acs1",
+    vintage = 2019,
+    region = "county:081",
+    regionin = "state:06",
+    vars = c("group(B07010)")
+  ) %>% 
+  select(!c(GEO_ID,state,NAME) & !ends_with(c("EA","MA","M"))) %>%
+  pivot_longer(
+    ends_with("E"),
+    names_to = "variable",
+    values_to = "estimate"
+  ) %>%
+  left_join(
+    acs_vars_2019_1yr %>% 
+      select(name, label), 
+    by = c("variable" = "name")
+  ) %>% 
+  select(-variable) %>% 
+  separate(
+    label,
+    into = c(NA,NA,"mobility","temp","income"),
+    sep = "!!"
+  ) %>% 
+  mutate(
+    income = ifelse(
+      temp == "No income",
+      temp,
+      income
+    ),
+    mobility = ifelse(
+      mobility %in% c("Same house 1 year ago:", "Moved within same county:"),
+      "Here since last year",
+      "Inflow"
+    )
+  ) %>% 
+  filter(!is.na(income)) %>% 
+  group_by(mobility, income) %>% 
+  summarize(estimate = sum(estimate))
+
+# Repeat these steps for the B07410 Data: 
+smc_mobility_lastyear_19 <- 
+  getCensus(
+    name = "acs/acs1",
+    vintage = 2019,
+    region = "county:081",
+    regionin = "state:06",
+    vars = c("group(B07410)")
+  ) %>% 
+  select(!c(GEO_ID,state,NAME) & !ends_with(c("EA","MA","M"))) %>%
+  pivot_longer(
+    ends_with("E"),
+    names_to = "variable",
+    values_to = "estimate"
+  ) %>%
+  left_join(
+    acs_vars_2019_1yr %>% 
+      select(name, label), 
+    by = c("variable" = "name")
+  ) %>% 
+  select(-variable)
+
+smc_mobility_lastyear_19 <- 
+  getCensus(
+    name = "acs/acs1",
+    vintage = 2019,
+    region = "county:081",
+    regionin = "state:06",
+    vars = c("group(B07410)")
+  ) %>% 
+  select(!c(GEO_ID,state,NAME) & !ends_with(c("EA","MA","M"))) %>%
+  pivot_longer(
+    ends_with("E"),
+    names_to = "variable",
+    values_to = "estimate"
+  ) %>%
+  left_join(
+    acs_vars_2019_1yr %>% 
+      select(name, label), 
+    by = c("variable" = "name")
+  ) %>% 
+  select(-variable) %>% 
+  separate(
+    label,
+    into = c(NA,NA,"mobility","temp","income"),
+    sep = "!!"
+  ) %>% 
+  mutate(
+    income = ifelse(
+      temp == "No income",
+      temp,
+      income
+    ),
+    mobility = ifelse(
+      mobility %in% c("Same house:", "Moved within same county:"),
+      "Here since last year",
+      "Outflow"
+    )
+  ) %>% 
+  filter(!is.na(income)) %>% 
+  group_by(mobility, income) %>% 
+  summarize(estimate = sum(estimate))
+
+# Check your work by verifying that "here since last year" is the same between the two dataframes. 
+
+# Find total population as recorded in 2018: 
+smc_mobility_current_18 <- 
+  getCensus(
+    name = "acs/acs1",
+    vintage = 2018,
+    region = "county:081",
+    regionin = "state:06",
+    vars = c("group(B07010)")
+  ) %>% 
+  select(!c(GEO_ID,state,NAME) & !ends_with(c("EA","MA","M"))) %>%
+  pivot_longer(
+    ends_with("E"),
+    names_to = "variable",
+    values_to = "estimate"
+  ) %>%
+  left_join(
+    acs_vars_2019_1yr %>% 
+      select(name, label), 
+    by = c("variable" = "name")
+  ) %>% 
+  select(-variable) %>% 
+  separate(
+    label,
+    into = c(NA,NA,"mobility","temp","income"),
+    sep = "!!"
+  ) %>% 
+  mutate(
+    income = ifelse(
+      temp == "No income",
+      temp,
+      income
+    ),
+    mobility = "Here last year"
+  ) %>% 
+  filter(!is.na(income)) %>% 
+  group_by(mobility, income) %>% 
+  summarize(estimate = sum(estimate))
+
+# Bind all od the dataframes created above together so that the new dataframe only holds on to counts of "here last year", "here this year", "outflow", and "inflow": 
+
+smc_flows_19 <-
+  rbind(
+    smc_mobility_current_18,
+    smc_mobility_lastyear_19 %>% 
+      filter(mobility == "Outflow"),
+    smc_mobility_current_19 %>% 
+      filter(mobility == "Inflow"),
+    smc_mobility_current_19 %>% 
+      group_by(income) %>% 
+      summarize(estimate = sum(estimate)) %>% 
+      mutate(mobility = "Here this year")
+  ) %>% 
+  pivot_wider(
+    names_from = mobility,
+    values_from = estimate
+  ) %>% 
+  mutate(
+    `External net` = Inflow - Outflow,
+    `Internal net` = `Here this year` - `Here last year` - `External net`,
+  ) %>% 
+  select(
+    `Income tier` = income, 
+    `Internal net`,
+    `External net`,
+    `Here last year`, 
+    `Here this year`, 
+    Outflow, 
+    Inflow
+  )
+
+smc_flows_19
+```
+
+
+# Microdata: PUMS
+```{r}
+# Installing tidycensus: tidycensus is currently the only way to efficiently load PUMS data into R. 
+install.packages("devtools")
+
+devtools::install_github("walkerke/tidycensus")
+
+#Setting up a data dictionary: 
+
+library(tidycensus)
+library(dplyr)
+
+census_api_key("6e3cadd908fdaf8f7d3d728f4faa99e738db811a")
+
+pums_vars_2018 <- 
+  pums_variables %>%
+  filter(year == 2018, survey == "acs5")
+
+pums_vars_2018_distinct_hh <- 
+  pums_vars_2018 %>%
+  distinct(var_code, var_label, data_type, level) %>% 
+  filter(level == "housing")
+```
+
+
+
+
+
+# Getting PUMS Data: 
+```{r}
+library(tidycensus)
+library(dplyr)
+
+# Specify the variables of interest: NP(Household size), HHL(Household Language), HINCP(Household Income), TEN(tenure), PUMA(Public Use Microdata Area where the respondent is located):
+
+ca_pums <- get_pums(
+  variables = c(
+    "PUMA",
+    "NP",
+    "HHL",
+    "HINCP",
+    "TEN"
+  ),
+  state = "CA",
+  year = 2018,
+  survey = "acs5",
+  recode = T
+)
+
+saveRDS(ca_pums, "ca_pums.rds")
+
+# Note that recode = T provides label fields directly in the dataset, otherwise you would need to join with the data dictionary. 
+# Additionally, SERIALNO was added to give a unique ID for each household. We need to remove duplicate serial number rows to create stats based on households. 
+# WGTP is the weight applied to the households. Summing this column would give the number of households that one sample record "represents". 
+
+
+#Filter to just PUMAs in the Bay Area: 
+library(tidyverse)
+library(sf)
+library(tigris)
+library(leaflet)
+library (dplyr)
+
+ca_pumas <-
+  pumas("CA", cb = T, progress_bar = F)
+
+ca_counties <- counties("CA", cb = T, progress_bar = F)
+
+st_crs(ca_counties)
+
+projection <- "+proj=utm +zone=10 +ellps=GRS80 +datum=NAD83 +units=ft +no_defs"
+
+ca_counties_transformed <- 
+  ca_counties %>% 
+  st_transform(4326) %>% 
+  st_transform(26910) %>% 
+  st_transform(projection) %>% 
+  st_transform(st_crs(ca_counties))
+
+usa_zips <- 
+  zctas(cb = T, progress_bar = F)
+
+bay_county_names <-
+  c(
+    "Alameda",
+    "Contra Costa",
+    "Marin",
+    "Napa",
+    "San Francisco",
+    "San Mateo",
+    "Santa Clara",
+    "Solano",
+    "Sonoma"
+  )
+
+bay_cbgs <- 
+  bay_county_names %>% 
+  map_dfr(function(county) {
+    block_groups("CA", county, cb = T, progress_bar = F)
+  })
+
+bay_counties <-
+  ca_counties %>%
+  filter(NAME %in% bay_county_names)
+
+bay_pumas <-
+  ca_pumas %>% 
+  st_centroid() %>% 
+  .[bay_counties, ] %>% 
+  st_set_geometry(NULL) %>% 
+  left_join(ca_pumas %>% select(GEOID10)) %>% 
+  st_as_sf()
+
+bay_pums <-
+  ca_pums %>% 
+  filter(PUMA %in% bay_pumas$PUMACE10)
+
+# Get summary statistics using dplyr functions. Must filter to just unique households and weight each household response with WGTP: 
+
+    # Construct a unique measure of the percent of households in a PUMA that are non-english speaking renter households with a household income less than $100,000/year:
+bay_pums_example <-
+  bay_pums %>% 
+  filter(!duplicated(SERIALNO)) %>% 
+  mutate(
+    nonenglish_renter_lowinc = ifelse(
+      (HHL_label != "English only") &
+        (TEN_label == "Rented") &
+        (HINCP < 100000),
+      WGTP,
+      0
+    )
+  ) %>% 
+  group_by(PUMA) %>% 
+  summarize(
+    perc_nonenglish_renter_lowinc =
+      sum(nonenglish_renter_lowinc, na.rm =T)/sum(WGTP, na.rm = T)*100
+  ) %>% 
+  left_join(
+    bay_pumas %>% 
+      select(PUMACE10),
+    by = c("PUMA" = "PUMACE10")
+  ) %>% 
+  st_as_sf()
+
+pums_pal <- colorNumeric(
+  palette = "Oranges",
+  domain = bay_pums_example$perc_nonenglish_renter_lowinc
+)
+
+leaflet() %>%
+  addTiles() %>% 
+  addPolygons(
+    data = bay_pums_example,
+    fillColor = ~pums_pal(perc_nonenglish_renter_lowinc),
+    color = "white",
+    opacity = 0.5,
+    fillOpacity = 0.5,
+    weight = 1,
+    label = ~paste0(
+      round(perc_nonenglish_renter_lowinc), 
+      "% non-English-speaking renter households making less than $100K"
+    ),
+    highlightOptions = highlightOptions(
+      weight = 2,
+      opacity = 1
+    )
+  ) %>% 
+  addLegend(
+    data = bay_pums_example,
+    pal = pums_pal,
+    values = ~perc_nonenglish_renter_lowinc,
+    title = "% non-English-speaking<br>renter households<br>making less than $100K"
+  )
+
+
+
+```
+
+
+# Spatial Subsets: 
+```{r}
+# Joining two datasets together that do not share the same kinds of geometries: 
+
+library(tigris)
+library(sf)
+library(leaflet)
+library(tidyverse)
+
+bay_pdas <- st_read("https://opendata.arcgis.com/datasets/36dd7a36576f42d4a3d6b0708e3982f4_0.geojson")
+
+# Mapping San Mateo blockgroups and PDAs: smc_blockgroups <- 
+  
+block_groups("CA", "San Mateo", cb = T, progress_bar = F) %>% 
+  st_transform(st_crs(bay_pdas))
+
+leaflet() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data = bay_pdas,
+    stroke = F,
+    fillOpacity = 0.5
+  ) %>% 
+  addPolygons(
+    data = smc_blockgroups,
+    color = "red",
+    weight = 0.75,
+    fill = F
+  )
+# Note that the geometry boundaries of the CBGs and the PDAs do not align. This produces a certain level of uncertainty in the data. 
+
+# Getting Population Data for PDAs: Using B01001 to get full populations counts for each CBG: 
+
+library(tidycensus)
+library(censusapi)
+library(sf)
+
+Sys.setenv(CENSUS_KEY="6e3cadd908fdaf8f7d3d728f4faa99e738db811a")
+
+
+smc_pdas <-
+  bay_pdas %>% 
+  filter(county == "San Mateo")
+
+smc_cbg_pop <-
+  getCensus(
+    name = "acs/acs5",
+    vintage = 2018,
+    region = "block group:*", 
+    regionin = "state:06+county:081",
+    vars = "B01001_001E"
+  ) %>%
+  transmute(
+    cbg =
+      paste0(state,county,tract,block_group),
+    pop = B01001_001E
+  ) %>% 
+  left_join(
+    smc_blockgroups %>% 
+      select(GEOID), 
+    by = c("cbg" = "GEOID")
+  ) %>% 
+  st_as_sf()
+
+smc_pda_pop1 <-
+  smc_cbg_pop[smc_pdas, ]
+
+smc_pda_pop1 <-
+  smc_cbg_pop %>% 
+filter(st_intersects(., st_union(smc_pdas), sparse = F))
+
+sum(smc_pda_pop1$pop)
+
+# Create a new map with the PDAs overlapping with the Census Block Group: 
+leaflet() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data = smc_pdas,
+    stroke = F,
+    fillOpacity = 0.5
+  ) %>% 
+  addPolygons(
+    data = smc_pda_pop1,
+    color = "red",
+    weight = 0.75,
+    fill = F
+  )
+
+# The above method overcounts population because it includes any CBG that touches the PDA boundary:  
+
+smc_pda_pop2 <-
+  smc_cbg_pop %>% 
+  st_centroid() %>% 
+  .[smc_pdas, ] %>% 
+  st_set_geometry(NULL) %>% 
+  left_join(smc_cbg_pop %>% select(cbg)) %>% 
+  st_as_sf()
+
+sum(smc_pda_pop2$pop)
+
+
+leaflet() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data = smc_pdas,
+    stroke = F,
+    fillOpacity = 0.5
+  ) %>% 
+  addPolygons(
+    data = smc_pda_pop2,
+    color = "red",
+    weight = 0.75,
+    fill = F
+  )
+
+
+
+
+```
+
